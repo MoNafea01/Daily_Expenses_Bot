@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ar" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة المصروفات المالية | Financial Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>💸 لوحة المصروفات اليومية</h1>
+      <div class="subtitle">Financial Dashboard — <span id="source-label">جارٍ التحميل…</span></div>
+    </header>
+
+    <!-- Configuration / toolbar -->
+    <div class="toolbar">
+      <div class="group">
+        <label for="salary-input">المرتب / الميزانية</label>
+        <input id="salary-input" type="number" min="0" step="500" />
+      </div>
+      <div class="group">
+        <label for="payday-input">يوم القبض</label>
+        <input id="payday-input" type="number" min="1" max="31" />
+      </div>
+      <button id="save-config">حفظ الإعدادات</button>
+
+      <div class="nav">
+        <button id="prev-month" class="secondary" title="الشهر السابق">◀</button>
+        <span id="month-label" class="month-label">—</span>
+        <button id="next-month" class="secondary" title="الشهر التالي">▶</button>
+        <button id="today-btn" class="secondary" title="الشهر الحالي">اليوم</button>
+      </div>
+    </div>
+
+    <div id="status">جارٍ تحميل البيانات…</div>
+
+    <!-- KPI strip -->
+    <div id="kpis" class="kpis"></div>
+
+    <!-- Latest transactions -->
+    <div class="card">
+      <h2>💰 أحدث العمليات</h2>
+      <div class="table-wrap">
+        <table id="transactions-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>المبلغ</th>
+              <th>العملة</th>
+              <th>الوصف</th>
+              <th>الفئة</th>
+              <th>طريقة الدفع</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="note" id="transactions-note"></div>
+    </div>
+
+    <!-- Monthly budget -->
+    <div class="card">
+      <h2>📊 ميزانية الشهر المالي الحالي</h2>
+      <div class="table-wrap">
+        <table id="budget-table">
+          <thead>
+            <tr>
+              <th>البند</th>
+              <th class="num">الميزانية</th>
+              <th class="num">المصروف</th>
+              <th class="num">المتبقي</th>
+              <th>الاستهلاك</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Yearly summary -->
+    <div class="card">
+      <h2>📅 ملخص الأداء المالي للسنة</h2>
+      <div class="table-wrap">
+        <table id="yearly-table">
+          <thead>
+            <tr>
+              <th>الشهر المالي</th>
+              <th class="num">الميزانية</th>
+              <th class="num">المصروف</th>
+              <th class="num">المتبقي</th>
+              <th class="num">نسبة الاستهلاك</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="card">
+      <h2>📈 المصروف الفعلي مقابل الميزانية المخططة</h2>
+      <div class="chart-wrap" id="chart"></div>
+      <div class="note">مقارنة المصروف الفعلي بالميزانية المخططة لكل شهر مالي.</div>
+    </div>
+
+    <footer>
+      Daily Expenses Bot — Financial Dashboard
+      <br />
+      <span class="note" id="debug"></span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

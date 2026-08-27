@@ -1,6 +1,10 @@
+import os
 import logging
 from datetime import datetime
+from pathlib import Path
 from fastapi import FastAPI, Request, BackgroundTasks, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 import agent
 import telegram_utils
 
@@ -11,11 +15,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+
 app = FastAPI(
     title="Daily Expenses Bot Server",
     description="FastAPI Webhook Server that parses expense records using LangGraph, DSPy, and Groq, then persists them in Google Sheets.",
     version="1.0.0"
 )
+
+# Serve the financial dashboard frontend
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+else:
+    logger.warning("Static directory not found: %s", STATIC_DIR)
+
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    """Serves the financial dashboard frontend at the root path."""
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return {"status": "dashboard missing", "detail": "static/index.html not found"}
 
 def run_agent_in_background(text: str, chat_id: int, date_str: str):
     """
@@ -104,19 +126,4 @@ def setup_webhook(url: str = Query(..., description="The HTTPS public URL of you
         return {"status": "success", "message": f"Telegram webhook has been registered to: {webhook_url}"}
     else:
         return {"status": "error", "message": f"Failed to register webhook. Check server logs."}
-
-@app.get("/")
-def root():
-    """
-    Root endpoint for basic server info.
-    """
-    return {
-        "message": "Daily Expenses Bot Server is running.",
-        "version": "1.0.0",
-        "endpoints": {
-            "webhook": "/webhook (POST)",
-            "health": "/health (GET)",
-            "setup-webhook": "/setup-webhook?url=<your_public_url> (GET)"
-        }
-    }
     
