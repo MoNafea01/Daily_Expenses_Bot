@@ -66,13 +66,6 @@ def run_router_node(state: AgentState) -> dict:
             "success": False
         }
 
-# Helper: persist conversation history including a new assistant message
-def _persist_history(state: AgentState, last_response: str) -> list:
-    conversation = list(state["conversation"])
-    conversation.append({"role": "assistant", "content": last_response})
-    sheets_client.save_conversation_history(state["chat_id"], conversation)
-    return conversation
-
 # Node C1: Just chatting - save history and reply with chat_response
 def save_chat_node(state: AgentState) -> dict:
     logger.info("Starting save_chat_node")
@@ -106,21 +99,34 @@ def missing_fields_node(state: AgentState) -> dict:
     }
 
 # Node D: Persist expense, verify, clear memory
+def _description_from_conversation(conversation: list) -> str:
+    """Builds a compact raw-text summary of the user's messages for the sheet."""
+    user_msgs = [m["content"] for m in conversation if m.get("role") == "user"]
+    return " | ".join(user_msgs)
+
 def persist_expense_node(state: AgentState) -> dict:
     logger.info("Starting persist_expense_node")
     chat_id = state["chat_id"]
-    router_output = state.get("router_output") or {}
-    raw_text = state["raw_text"]
+    conversation = state.get("conversation") or []
+    current_date = state.get("current_date")
 
-    # Build the expense dict from the router output
-    expense = {
-        "date": router_output.get("date"),
-        "amount": router_output.get("amount"),
-        "currency": router_output.get("currency"),
-        "description": router_output.get("description"),
-        "category": router_output.get("category"),
-        "payment_method": router_output.get("payment_method"),
-    }
+    # Run a dedicated complete extraction over the FULL conversation so that
+    # fields mentioned in earlier turns (e.g. description/category) are not lost
+    # when the final message only provides the date or amount.
+    try:
+        final_expense = dspy_extractor.extract_final_expense(conversation, current_date)
+        expense = final_expense.model_dump()
+    except Exception as e:
+        error_msg = f"Failed to extract complete expense details: {e}"
+        logger.error(error_msg)
+        return {
+            "appended_row": None,
+            "is_verified": False,
+            "reply_text": f"❌ *Transaction failed*\n\nUnable to process the expense. Error:\n`{error_msg}`",
+            "success": False
+        }
+
+    raw_text = _description_from_conversation(conversation)
 
     try:
         row = sheets_client.append_expense(expense, raw_text)

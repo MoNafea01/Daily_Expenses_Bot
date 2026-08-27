@@ -141,6 +141,33 @@ def run_tests():
     finally:
         telegram_utils.send_telegram_message = original_send
 
+    # ------------------------------------------------------------------
+    # Test 5: Regression - multi-turn description/raw-text preservation
+    # Reproduces the reported bug where logging a purchase across turns
+    # (detail -> amount -> date) lost the description (became "Unspecified").
+    # ------------------------------------------------------------------
+    logger.info("\n--- Test 5: Multi-turn full extraction preserves description ---")
+    convo = [
+        {"role": "user", "content": "انا اشتريت النهاردة ssd من مول البستان"},
+        {"role": "assistant", "content": "من فضلك أخبرني بالمبلغ الذي دفعته للـ SSD وكذلك فئة المصروف."},
+        {"role": "user", "content": "جبته ب6000 والنوع تسوق"},
+        {"role": "assistant", "content": "من فضلك أخبرني بتاريخ هذا المصروف."},
+        {"role": "user", "content": "النهاردة"},
+    ]
+    try:
+        exp = dspy_extractor.extract_final_expense(convo, current_date)
+        logger.info(f"Final expense: {exp.model_dump()}")
+        ok = (exp.amount == 6000.0
+              and exp.category == "Shopping"
+              and exp.description not in ("Unspecified", "")
+              and any(w in exp.description.lower() for w in ("ssd", "اس اس دي")))
+        if ok:
+            logger.info("Test 5 PASSED: description preserved across turns.")
+        else:
+            logger.error(f"Test 5 FAILED: got {exp.model_dump()}")
+    except Exception as e:
+        logger.error(f"Test 5 failed with exception: {e}")
+
     logger.info("\n=== WORKFLOW VERIFICATION COMPLETED ===")
 
 
