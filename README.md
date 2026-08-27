@@ -1,0 +1,106 @@
+# 💸 Daily Expenses Bot
+
+A natural language Telegram bot that structures your daily expenses using **FastAPI**, **LangGraph**, and **DSPy** with **Groq**, persists them in **Google Sheets**, and double-checks write operations before notifying you. 
+
+Designed for seamless integration with local financial dashboards, such as Obsidian, via Google Sheets.
+
+---
+
+## 🛠️ Architecture
+
+1. **User Message:** Send a natural language expense report (e.g., `"spent 120 EGP on a taxi today"`) to your Telegram Bot.
+2. **FastAPI Webhook:** Receives the Telegram payload, acknowledges it with `200 OK` instantly to prevent Telegram timeouts, and queues the execution as a background task.
+3. **LangGraph Worker:**
+   - **Parse:** DSPy + Groq (`openai/gpt-oss-20b`) structures the text into a structured Pydantic model. It automatically resolves relative dates (like `"yesterday"`, `"last Friday"`) based on the message timestamp.
+   - **Persist:** Appends the record to your Google Sheets database.
+   - **Double-Check:** Verifies the write by querying the spreadsheet and comparing the last row with the input values.
+   - **Respond:** Sends a beautiful, formatted Markdown confirmation back to you on Telegram.
+4. **Keep Alive:** A free 10-minute cron job from `cron-job.org` pings `/health` to keep the Render server from falling asleep.
+
+---
+
+## ⚙️ Prerequisites & Environment Configuration
+
+Create a `.env` file in the root directory (one is already initialized for you) with the following variables:
+
+```ini
+TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
+GROQ_API_KEY="your_groq_api_key"
+GOOGLE_SHEET_ID="your_google_sheet_id"
+GOOGLE_SERVICE_ACCOUNT_JSON={"type": "service_account", ...}
+```
+
+*Note: Ensure the Google Service Account email has **Editor** access to your Google Sheet.*
+
+---
+
+## 🚀 Local Development & Testing
+
+### 1. Installation
+Set up a Python virtual environment and install the required dependencies:
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Verify Your Configuration
+Run the integration test script to verify DSPy extraction, Google Sheets connection, and the LangGraph workflow:
+```bash
+python test_workflow.py
+```
+This script will mock a Telegram message send, verify sheets logging, and output a preview of the formatted Markdown response.
+
+### 3. Run FastAPI Server Locally
+Start the server using `uvicorn`:
+```bash
+uvicorn main:app --reload
+```
+The server will start at `http://127.0.0.1:8000`. You can inspect the health check at `http://127.0.0.1:8000/health`.
+
+---
+
+## ☁️ Deploying to Render
+
+1. Push your repository to **GitHub** or **GitLab**.
+2. Go to [Render](https://render.com/) and create a new **Web Service**.
+3. Link your repository.
+4. Configure the settings:
+   - **Runtime:** `Python`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+5. In the **Environment** tab, add all variables from your `.env` file (`TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`).
+6. Click **Deploy Web Service**.
+
+---
+
+## 🔗 Telegram Webhook & Cron Setup
+
+### 1. Register Webhook
+Once your Render web service is live, copy its public URL (e.g., `https://daily-expenses-bot.onrender.com`).
+Register this URL with Telegram by opening your web browser and navigating to:
+```text
+https://<your-render-app-url>/setup-webhook?url=https://<your-render-app-url>/webhook
+```
+Example: `https://daily-expenses-bot.onrender.com/setup-webhook?url=https://daily-expenses-bot.onrender.com/webhook`
+
+If successful, the page will output:
+`{"status":"success","message":"Telegram webhook has been registered to: https://.../webhook"}`
+
+### 2. Keep Render Awake (Remove Spin-Up Delay)
+Since Render's free tier spins down services after 15 minutes of inactivity:
+1. Create a free account on [cron-job.org](https://cron-job.org/).
+2. Create a new cron job:
+   - **URL:** `https://<your-render-app-url>/health`
+   - **Interval:** Every 10 minutes.
+This keeps the server active, ensuring zero delays when you send expenses via Telegram.
+
+---
+
+## 📓 Connecting to Obsidian
+
+To integrate these entries with your financial dashboard at `D:\Obsidian Vault\Financial Dashboard.md` when an internet connection is available:
+1. Install an Obsidian community plugin such as **Google Sheets Link** or **Local REST API** that syncs with remote worksheets.
+2. Alternatively, you can use the **Dataview** plugin with a custom JS script to pull Google Sheets data dynamically when Obsidian loads:
+   - Configure a Google Sheets API endpoint or fetch CSV/JSON format from your published sheet URL (or through the Sheets API using a custom script).
+   - Use this fetched data to populate your `Financial Dashboard.md` charts and summaries.
