@@ -104,3 +104,19 @@ def setup_webhook(url: str = Query(..., description="The HTTPS public URL of you
         return {"status": "success", "message": f"Telegram webhook has been registered to: {webhook_url}"}
     else:
         return {"status": "error", "message": f"Failed to register webhook. Check server logs."}
+
+@app.get("/")
+def root():
+    """
+    Root endpoint for basic server info.
+    """
+    return {
+        "message": "Daily Expenses Bot Server is running.",
+        "version": "1.0.0",
+        "endpoints": {
+            "webhook": "/webhook (POST)",
+            "health": "/health (GET)",
+            "setup-webhook": "/setup-webhook?url=<your_public_url> (GET)"
+        }
+    }
+    
