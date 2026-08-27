@@ -1,5 +1,5 @@
 import logging
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
 import dspy_extractor
 import sheets_client
@@ -13,174 +13,238 @@ class AgentState(TypedDict):
     raw_text: str
     chat_id: int
     current_date: str
-    
-    # Intermediate outputs
-    extracted_expense: Optional[dict]
-    appended_row: Optional[list]
-    
-    # Verification/Final state
-    is_verified: Optional[bool]
-    error_message: Optional[str]
 
-# Define Node 1: Parse the expense text
-def parse_expense_node(state: AgentState) -> dict:
-    logger.info("Starting parse_expense_node")
+    # Memory / conversation
+    conversation: List[dict]
+
+    # Router & extraction output
+    router_output: Optional[dict]
+
+    # Persistence / verification
+    appended_row: Optional[list]
+    is_verified: Optional[bool]
+
+    # Final message to send
+    reply_text: Optional[str]
+    success: Optional[bool]
+
+# Node A: Load conversation history and append the new user message
+def load_memory_node(state: AgentState) -> dict:
+    logger.info("Starting load_memory_node")
+    chat_id = state["chat_id"]
     raw_text = state["raw_text"]
-    current_date = state["current_date"]
-    
+
     try:
-        extraction = dspy_extractor.parse_expense_text(raw_text, current_date)
-        # Convert pydantic model to dict
-        extraction_dict = extraction.model_dump()
+        history = sheets_client.get_conversation_history(chat_id)
+        conversation = list(history)
+        conversation.append({"role": "user", "content": raw_text})
+        logger.info(f"Loaded {len(conversation)} messages for chat {chat_id}")
+        return {"conversation": conversation}
+    except Exception as e:
+        error_msg = f"Failed to load conversation memory: {e}"
+        logger.error(error_msg)
+        return {"conversation": [{"role": "user", "content": raw_text}]}
+
+# Node B: Run the DSPy Router & Extractor
+def run_router_node(state: AgentState) -> dict:
+    logger.info("Starting run_router_node")
+    conversation = state["conversation"]
+    current_date = state["current_date"]
+
+    try:
+        output = dspy_extractor.run_router(conversation, current_date)
         return {
-            "extracted_expense": extraction_dict,
-            "error_message": None
+            "router_output": output.model_dump(),
+            "success": None
         }
     except Exception as e:
-        error_msg = f"Failed to parse transaction text: {e}"
+        error_msg = f"Failed to classify conversation: {e}"
         logger.error(error_msg)
         return {
-            "error_message": error_msg
+            "router_output": None,
+            "reply_text": "Sorry, I had trouble understanding that. Please try again.",
+            "success": False
         }
 
-# Define Node 2: Persist to Sheets
+# Helper: persist conversation history including a new assistant message
+def _persist_history(state: AgentState, last_response: str) -> list:
+    conversation = list(state["conversation"])
+    conversation.append({"role": "assistant", "content": last_response})
+    sheets_client.save_conversation_history(state["chat_id"], conversation)
+    return conversation
+
+# Node C1: Just chatting - save history and reply with chat_response
+def save_chat_node(state: AgentState) -> dict:
+    logger.info("Starting save_chat_node")
+    router_output = state.get("router_output") or {}
+    chat_response = router_output.get("chat_response") or "I'm here to help you track your expenses!"
+
+    conversation = list(state["conversation"])
+    conversation.append({"role": "assistant", "content": chat_response})
+    sheets_client.save_conversation_history(state["chat_id"], conversation)
+
+    return {
+        "conversation": conversation,
+        "reply_text": chat_response,
+        "success": True
+    }
+
+# Node C2: Missing fields - persist history with the prompt, send prompt
+def missing_fields_node(state: AgentState) -> dict:
+    logger.info("Starting missing_fields_node")
+    router_output = state.get("router_output") or {}
+    prompt = router_output.get("missing_fields_prompt") or "Please provide the missing expense details."
+
+    conversation = list(state["conversation"])
+    conversation.append({"role": "assistant", "content": prompt})
+    sheets_client.save_conversation_history(state["chat_id"], conversation)
+
+    return {
+        "conversation": conversation,
+        "reply_text": prompt,
+        "success": True
+    }
+
+# Node D: Persist expense, verify, clear memory
 def persist_expense_node(state: AgentState) -> dict:
     logger.info("Starting persist_expense_node")
-    if state.get("error_message"):
-        # Skip if there's an error from previous node
-        return {}
-        
-    extracted_expense = state["extracted_expense"]
+    chat_id = state["chat_id"]
+    router_output = state.get("router_output") or {}
     raw_text = state["raw_text"]
-    
+
+    # Build the expense dict from the router output
+    expense = {
+        "date": router_output.get("date"),
+        "amount": router_output.get("amount"),
+        "currency": router_output.get("currency"),
+        "description": router_output.get("description"),
+        "category": router_output.get("category"),
+        "payment_method": router_output.get("payment_method"),
+    }
+
     try:
-        row = sheets_client.append_expense(extracted_expense, raw_text)
+        row = sheets_client.append_expense(expense, raw_text)
+        logger.info(f"Appended expense row: {row}")
+
+        verified = sheets_client.verify_expense_write(row)
+        if not verified:
+            raise ValueError("Google Sheets write verification failed. The last row does not match the expected row.")
+
+        # Clear conversation memory since the expense was recorded
+        sheets_client.clear_conversation_history(chat_id)
+
+        # Build confirmation message
+        date = expense.get("date") or "Unknown"
+        amount = expense.get("amount") or 0
+        currency = expense.get("currency") or "EGP"
+        description = expense.get("description") or "Unspecified"
+        category = expense.get("category") or "Other"
+        payment = expense.get("payment_method") or "Cash"
+
+        message = (
+            f"✅ *Expense Logged Successfully!*\n\n"
+            f"📅 *Date:* {date}\n"
+            f"💰 *Amount:* {amount} {currency}\n"
+            f"📝 *Description:* {description}\n"
+            f"🏷️ *Category:* {category}\n"
+            f"💳 *Payment Method:* {payment}\n\n"
+            f"_Double-checked and verified in Google Sheets!_"
+        )
+
         return {
             "appended_row": row,
-            "error_message": None
+            "is_verified": True,
+            "reply_text": message,
+            "success": True
         }
     except Exception as e:
-        error_msg = f"Failed to persist to Google Sheets: {e}"
+        error_msg = f"Failed to persist expense: {e}"
         logger.error(error_msg)
         return {
-            "error_message": error_msg
-        }
-
-# Define Node 3: Verify the write
-def verify_write_node(state: AgentState) -> dict:
-    logger.info("Starting verify_write_node")
-    if state.get("error_message"):
-        return {"is_verified": False}
-        
-    appended_row = state["appended_row"]
-    
-    try:
-        is_verified = sheets_client.verify_expense_write(appended_row)
-        if is_verified:
-            logger.info("Successfully verified Google Sheet write.")
-            return {"is_verified": True}
-        else:
-            error_msg = "Google Sheets write verification failed. The last row does not match the expected row."
-            logger.error(error_msg)
-            return {
-                "is_verified": False,
-                "error_message": error_msg
-            }
-    except Exception as e:
-        error_msg = f"Exception during write verification: {e}"
-        logger.error(error_msg)
-        return {
+            "appended_row": None,
             "is_verified": False,
-            "error_message": error_msg
+            "reply_text": f"❌ *Transaction failed*\n\nUnable to process the expense. Error:\n`{error_msg}`",
+            "success": False
         }
 
-# Define Node 4: Send telegram response
+# Node E: Send the final reply to Telegram
 def respond_node(state: AgentState) -> dict:
     logger.info("Starting respond_node")
     chat_id = state["chat_id"]
-    error_message = state.get("error_message")
-    extracted = state.get("extracted_expense")
-    
-    if error_message:
-        message = (
-            f"❌ *Transaction failed*\n\n"
-            f"Unable to process transaction. Error:\n`{error_message}`"
-        )
-    else:
-        # Formulate beautiful markdown confirmation message
-        message = (
-            f"✅ *Expense Logged Successfully!*\n\n"
-            f"📅 *Date:* {extracted.get('date')}\n"
-            f"💰 *Amount:* {extracted.get('amount')} {extracted.get('currency')}\n"
-            f"📝 *Description:* {extracted.get('description')}\n"
-            f"🏷️ *Category:* {extracted.get('category')}\n"
-            f"💳 *Payment Method:* {extracted.get('payment_method')}\n\n"
-            f"_Double-checked and verified in Google Sheets!_"
-        )
-        
-    telegram_utils.send_telegram_message(chat_id, message)
+    reply_text = state.get("reply_text") or ""
+    telegram_utils.send_telegram_message(chat_id, reply_text)
     return {}
 
-# Define router / conditional edge
-def route_after_parse(state: AgentState):
-    if state.get("error_message"):
-        # Skip persistence and verification, go straight to respond
-        return "respond"
+# Router branch after DSPy run
+def route_after_router(state: AgentState):
+    if state.get("success") is False:
+        return "respond_no_reply"
+    router_output = state.get("router_output") or {}
+    if not router_output.get("is_expense_log"):
+        return "save_chat"
+    missing = router_output.get("missing_fields_prompt")
+    if missing:
+        return "missing_fields"
     return "persist"
-
-def route_after_persist(state: AgentState):
-    if state.get("error_message"):
-        return "respond"
-    return "verify"
 
 # Build LangGraph workflow
 workflow = StateGraph(AgentState)
 
 # Add nodes
-workflow.add_node("parse", parse_expense_node)
+workflow.add_node("load_memory", load_memory_node)
+workflow.add_node("run_router", run_router_node)
+workflow.add_node("save_chat", save_chat_node)
+workflow.add_node("missing_fields", missing_fields_node)
 workflow.add_node("persist", persist_expense_node)
-workflow.add_node("verify", verify_write_node)
 workflow.add_node("respond", respond_node)
 
 # Set entry point
-workflow.set_entry_point("parse")
+workflow.set_entry_point("load_memory")
 
 # Add edges
+workflow.add_edge("load_memory", "run_router")
+
 workflow.add_conditional_edges(
-    "parse",
-    route_after_parse,
+    "run_router",
+    route_after_router,
     {
+        "save_chat": "save_chat",
+        "missing_fields": "missing_fields",
         "persist": "persist",
-        "respond": "respond"
+        "respond_no_reply": "respond"
     }
 )
-workflow.add_conditional_edges(
-    "persist",
-    route_after_persist,
-    {
-        "verify": "verify",
-        "respond": "respond"
-    }
-)
-workflow.add_edge("verify", "respond")
+
+workflow.add_edge("save_chat", "respond")
+workflow.add_edge("missing_fields", "respond")
+workflow.add_edge("persist", "respond")
 workflow.add_edge("respond", END)
 
 # Compile graph
 expense_agent = workflow.compile()
 
+
 def run_expense_flow(raw_text: str, chat_id: int, current_date: str = None) -> dict:
     """
-    Executes the entire LangGraph workflow for an expense text.
+    Executes the entire conversational LangGraph workflow for a user message.
+    Loads persistent memory, routes, collects missing fields across turns,
+    records verified expenses, and clears memory on completion.
     """
+    from datetime import datetime as _dt
+    if not current_date:
+        current_date = _dt.now().strftime("%Y-%m-%d")
+
     initial_state = {
         "raw_text": raw_text,
         "chat_id": chat_id,
-        "current_date": current_date or "",
-        "extracted_expense": None,
+        "current_date": current_date,
+        "conversation": [],
+        "router_output": None,
         "appended_row": None,
         "is_verified": None,
-        "error_message": None
+        "reply_text": None,
+        "success": None,
     }
-    
-    logger.info(f"Triggering LangGraph workflow for raw text: '{raw_text}'")
+
+    logger.info(f"Triggering conversational LangGraph workflow for chat {chat_id}")
     return expense_agent.invoke(initial_state)

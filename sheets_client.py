@@ -1,4 +1,5 @@
 import logging
+import json
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
@@ -110,3 +111,86 @@ def verify_expense_write(expected_row: list) -> bool:
     except Exception as e:
         logger.error(f"Error during sheet write verification: {e}")
         return False
+
+def get_memory_worksheet():
+    """Gets or creates the 'Memory' worksheet for conversation history."""
+    client = get_sheets_client()
+    spreadsheet = client.open_by_key(config.GOOGLE_SHEET_ID)
+    
+    try:
+        worksheet = spreadsheet.worksheet("Memory")
+    except gspread.exceptions.WorksheetNotFound:
+        # Create worksheet if it doesn't exist
+        worksheet = spreadsheet.add_worksheet(title="Memory", rows=1000, cols=3)
+        headers = ["ChatID", "HistoryJSON", "LastUpdated"]
+        worksheet.insert_row(headers, 1)
+        logger.info("Created 'Memory' worksheet and initialized headers.")
+        
+    return worksheet
+
+def get_conversation_history(chat_id: int) -> list:
+    """Retrieves conversation history list for a chat_id."""
+    try:
+        worksheet = get_memory_worksheet()
+        records = worksheet.get_all_values()
+        
+        # Skip header, find row
+        chat_id_str = str(chat_id)
+        for row in records[1:]:
+            if row and row[0] == chat_id_str:
+                return json.loads(row[1])
+                
+        return []
+    except Exception as e:
+        logger.error(f"Error getting conversation history for chat {chat_id}: {e}")
+        return []
+
+def save_conversation_history(chat_id: int, history: list):
+    """Saves conversation history list for a chat_id."""
+    try:
+        worksheet = get_memory_worksheet()
+        records = worksheet.get_all_values()
+        
+        chat_id_str = str(chat_id)
+        history_json = json.dumps(history, ensure_ascii=False)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Search for existing row
+        row_idx = -1
+        for idx, row in enumerate(records):
+            if row and row[0] == chat_id_str:
+                row_idx = idx + 1 # 1-indexed row number
+                break
+                
+        if row_idx != -1:
+            # Update existing row (HistoryJSON is column 2, LastUpdated is column 3)
+            worksheet.update_cell(row_idx, 2, history_json)
+            worksheet.update_cell(row_idx, 3, now_str)
+            logger.info(f"Updated conversation history in sheet for chat {chat_id}.")
+        else:
+            # Append new row
+            worksheet.append_row([chat_id_str, history_json, now_str])
+            logger.info(f"Created new conversation history row in sheet for chat {chat_id}.")
+    except Exception as e:
+        logger.error(f"Error saving conversation history for chat {chat_id}: {e}")
+
+def clear_conversation_history(chat_id: int):
+    """Clears conversation history for a chat_id by resetting its JSON to empty list."""
+    try:
+        worksheet = get_memory_worksheet()
+        records = worksheet.get_all_values()
+        
+        chat_id_str = str(chat_id)
+        row_idx = -1
+        for idx, row in enumerate(records):
+            if row and row[0] == chat_id_str:
+                row_idx = idx + 1
+                break
+                
+        if row_idx != -1:
+            worksheet.update_cell(row_idx, 2, "[]")
+            worksheet.update_cell(row_idx, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            logger.info(f"Cleared conversation history in sheet for chat {chat_id}.")
+    except Exception as e:
+        logger.error(f"Error clearing conversation history for chat {chat_id}: {e}")
+

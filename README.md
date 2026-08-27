@@ -10,10 +10,14 @@ Designed for seamless integration with local financial dashboards, such as Obsid
 
 1. **User Message:** Send a natural language expense report (e.g., `"spent 120 EGP on a taxi today"`) to your Telegram Bot.
 2. **FastAPI Webhook:** Receives the Telegram payload, acknowledges it with `200 OK` instantly to prevent Telegram timeouts, and queues the execution as a background task.
-3. **LangGraph Worker:**
-   - **Parse:** DSPy + Groq (`openai/gpt-oss-20b`) structures the text into a structured Pydantic model. It automatically resolves relative dates (like `"yesterday"`, `"last Friday"`) based on the message timestamp.
-   - **Persist:** Appends the record to your Google Sheets database.
-   - **Double-Check:** Verifies the write by querying the spreadsheet and comparing the last row with the input values.
+3. **Conversational LangGraph Worker (multi-turn):**
+   - **Load Memory:** Fetches prior conversation history for the `chat_id` from the `Memory` worksheet in your Google Sheet so details can be carried across turns.
+   - **Route & Extract:** A **DSPy + Groq (`openai/gpt-oss-20b`) router** looks at the full conversation and decides whether this is an expense log (or answers completing it), or just casual chat:
+     - **Just chatting** → replies conversationally and saves the dialogue.
+     - **Incomplete expense** (e.g. only "I ate kabab") → asks in the user's language (Arabic/English) for the missing mandatory fields (date, amount, category) and remembers the partial info.
+     - **Complete expense** → extracts all fields, resolving relative dates (like `"yesterday"`, `"last Friday"`).
+   - **Persist & Verify:** Appends the complete record to your Google Sheets database, then double-checks the write by querying the spreadsheet and comparing the last row with the input values.
+   - **Clear Memory:** Resets the conversation history once an expense is successfully recorded.
    - **Respond:** Sends a beautiful, formatted Markdown confirmation back to you on Telegram.
 
 ---
@@ -30,6 +34,10 @@ GOOGLE_SERVICE_ACCOUNT_JSON={"type": "service_account", ...}
 ```
 
 *Note: Ensure the Google Service Account email has **Editor** access to your Google Sheet.*
+
+The bot uses **two worksheets** in the same spreadsheet:
+- `Sheet1` (or the first sheet): stores logged expense records.
+- `Memory`: stores per-`chat_id` conversation history (JSON) to support multi-turn expensing. It is created automatically on first use.
 
 ---
 

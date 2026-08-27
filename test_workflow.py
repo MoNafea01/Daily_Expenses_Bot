@@ -19,94 +19,130 @@ logging.basicConfig(
 )
 logger = logging.getLogger("test_workflow")
 
+
 def run_tests():
-    logger.info("=== STARTING WORKFLOW VERIFICATION ===")
-    
-    # 1. Test DSPy parsing
-    test_texts = [
-        "bought groceries at Carrefour for 350 EGP yesterday using card",
-        "spent 12.5 USD on Uber ride today",
-        "paid rent 5000 EGP cash"
-    ]
-    
+    logger.info("=== STARTING WORKFLOW VERIFICATION (Conversational) ===")
+
     current_date = datetime.now().strftime("%Y-%m-%d")
     logger.info(f"Using current date anchor: {current_date}")
-    
-    parsed_results = []
-    for idx, text in enumerate(test_texts, 1):
-        logger.info(f"\n--- Test {idx}: Parsing Text: '{text}' ---")
-        try:
-            res = dspy_extractor.parse_expense_text(text, current_date)
-            logger.info(f"Result {idx}: date={res.date}, amount={res.amount}, currency={res.currency}, description='{res.description}', category={res.category}, payment_method={res.payment_method}")
-            parsed_results.append(res.model_dump())
-        except Exception as e:
-            logger.error(f"Failed parsing test {idx}: {e}")
-            return
-            
-    # 2. Test Google Sheets client with the first parsed result
-    if not parsed_results:
-        logger.error("No parsed results to test sheets with.")
-        return
-        
-    logger.info("\n--- Test Google Sheets Append & Verify ---")
-    test_expense = parsed_results[0]
-    raw_text = test_texts[0]
-    
-    try:
-        # Check sheet connection by getting last record
-        logger.info("Connecting to Google Sheets...")
-        last_rec_before = sheets_client.get_last_record()
-        logger.info(f"Last record in sheet before write: {last_rec_before}")
-        
-        # Append mock record
-        logger.info(f"Appending row: {test_expense}")
-        appended_row = sheets_client.append_expense(test_expense, raw_text)
-        logger.info(f"Appended row values: {appended_row}")
-        
-        # Verify the append
-        logger.info("Verifying write...")
-        is_verified = sheets_client.verify_expense_write(appended_row)
-        if is_verified:
-            logger.info("✅ Verification PASSED: Last written row matches what we sent!")
-        else:
-            logger.error("❌ Verification FAILED: Last written row does not match what we sent!")
-            
-    except Exception as e:
-        logger.error(f"Google Sheets test failed: {e}")
-        return
 
-    # 3. Test the full LangGraph agent flow (without sending actual telegram message by mocking sending)
-    logger.info("\n--- Test Full LangGraph Flow (Mocked Telegram Send) ---")
-    
-    # Mock send_telegram_message to verify the flow is executed end-to-end
+    # ------------------------------------------------------------------
+    # Test 1: Just chatting (e.g. "Hello bot").
+    # Expect: is_expense_log = False and a chat response.
+    # ------------------------------------------------------------------
+    logger.info("\n--- Test 1: Chatting (no expense) ---")
+    try:
+        res = dspy_extractor.run_router(
+            [{"role": "user", "content": "Hello bot, how are you?"}],
+            current_date
+        )
+        logger.info(f"is_expense_log={res.is_expense_log}, chat_response='{res.chat_response}'")
+        if res.is_expense_log:
+            logger.error("Test 1 FAILED: expected is_expense_log=False")
+        else:
+            logger.info("Test 1 PASSED: bot responded to casual chat.")
+    except Exception as e:
+        logger.error(f"Test 1 failed with exception: {e}")
+
+    # ------------------------------------------------------------------
+    # Test 2: Incomplete expense (e.g. "I ate Kabab").
+    # Expect: is_expense_log = True and a prompt for the missing amount.
+    # ------------------------------------------------------------------
+    logger.info("\n--- Test 2: Incomplete expense (missing amount) ---")
+    try:
+        res = dspy_extractor.run_router(
+            [{"role": "user", "content": "I ate kabab"}],
+            current_date
+        )
+        logger.info(f"is_expense_log={res.is_expense_log}, missing_fields_prompt='{res.missing_fields_prompt}'")
+        logger.info(f"category={res.category}, description={res.description}")
+        if not res.is_expense_log:
+            logger.error("Test 2 FAILED: expected is_expense_log=True")
+        elif not res.missing_fields_prompt:
+            logger.error("Test 2 FAILED: expected a missing fields prompt (amount missing)")
+        else:
+            logger.info("Test 2 PASSED: bot prompted for missing amount.")
+    except Exception as e:
+        logger.error(f"Test 2 failed with exception: {e}")
+
+    # ------------------------------------------------------------------
+    # Test 3: Complete turn (History: "I ate Kabab" + Bot prompt + "It cost 150").
+    # Expect: full details resolved (Amount: 150, category food, desc kabab, date today)
+    # and no missing fields prompt.
+    # ------------------------------------------------------------------
+    logger.info("\n--- Test 3: Complete expense across turns ---")
+    conversation = [
+        {"role": "user", "content": "I ate kabab"},
+        {"role": "assistant", "content": "How much did it cost?"},
+        {"role": "user", "content": "It cost 150"},
+    ]
+    try:
+        res = dspy_extractor.run_router(conversation, current_date)
+        logger.info(
+            f"is_expense_log={res.is_expense_log}, amount={res.amount}, category={res.category}, "
+            f"description={res.description}, date={res.date}, missing='{res.missing_fields_prompt}'"
+        )
+        if not res.is_expense_log:
+            logger.error("Test 3 FAILED: expected is_expense_log=True")
+        elif res.missing_fields_prompt:
+            logger.error("Test 3 FAILED: expected no missing fields prompt")
+        elif res.amount is None or float(res.amount) != 150.0:
+            logger.error(f"Test 3 FAILED: unexpected amount {res.amount}")
+        else:
+            logger.info("Test 3 PASSED: full expense resolved with no missing fields.")
+    except Exception as e:
+        logger.error(f"Test 3 failed with exception: {e}")
+
+    # ------------------------------------------------------------------
+    # Test 4: Full conversational LangGraph flow (mocked Telegram send)
+    # Simulates an incomplete message first, then completes it across turns,
+    # verifying memory persistence and final recording.
+    # ------------------------------------------------------------------
+    logger.info("\n--- Test 4: Full LangGraph conversational flow (Mocked Telegram Send) ---")
     import telegram_utils
     original_send = telegram_utils.send_telegram_message
-    
+
     def mock_send(chat_id, text, parse_mode="Markdown"):
         logger.info(f"MOCK TELEGRAM SEND to chat {chat_id}:")
         print("--------------------")
         print(text)
         print("--------------------")
         return True
-        
+
     telegram_utils.send_telegram_message = mock_send
-    
+
+    test_chat = 999998
     try:
-        logger.info("Invoking Agent Flow...")
-        result = agent.run_expense_flow(
-            raw_text="spent 45 EGP on cigarettes cash",
-            chat_id=999999,
+        # Clear any prior memory for this test chat so the flow starts fresh.
+        sheets_client.clear_conversation_history(test_chat)
+
+        logger.info("Turn 1: incomplete expense...")
+        r1 = agent.run_expense_flow(
+            raw_text="سيارة اجرة اليوم",
+            chat_id=test_chat,
             current_date=current_date
         )
-        logger.info(f"Agent flow finished. Final state keys: {list(result.keys())}")
-        logger.info(f"Final state: is_verified={result.get('is_verified')}, error_message={result.get('error_message')}")
+        logger.info(f"Turn 1 reply: {r1.get('reply_text')}")
+        logger.info(f"Turn 1 success: {r1.get('success')}, persisted={r1.get('appended_row') is not None}")
+
+        logger.info("Turn 2: completing the expense...")
+        r2 = agent.run_expense_flow(
+            raw_text="كانت 120",
+            chat_id=test_chat,
+            current_date=current_date
+        )
+        logger.info(f"Turn 2 reply: {r2.get('reply_text')}")
+        logger.info(f"Turn 2 success: {r2.get('success')}, is_verified={r2.get('is_verified')}")
+
+        history_after = sheets_client.get_conversation_history(test_chat)
+        logger.info(f"Memory after completion (should be cleared/empty): {history_after}")
     except Exception as e:
-        logger.error(f"LangGraph Agent test failed: {e}")
+        logger.error(f"Test 4 failed with exception: {e}")
     finally:
-        # Restore original function
         telegram_utils.send_telegram_message = original_send
 
     logger.info("\n=== WORKFLOW VERIFICATION COMPLETED ===")
+
 
 if __name__ == "__main__":
     run_tests()

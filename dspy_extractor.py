@@ -1,5 +1,7 @@
 import logging
+import json
 from datetime import datetime
+from typing import Optional, List
 import dspy
 from pydantic import BaseModel, Field
 import config
@@ -16,52 +18,103 @@ except Exception as e:
     logger.error(f"Error configuring DSPy LM: {e}")
     raise
 
-# Define the Pydantic model for structured output
-class ExpenseExtraction(BaseModel):
-    date: str = Field(
-        description="ISO 8601 formatted date (YYYY-MM-DD) when the expense occurred. Resolve relative dates (e.g. 'today', 'yesterday', 'last Wednesday') using the provided current_date as the reference anchor."
+# Define the Pydantic model for unified routing & extraction output
+class RouterOutput(BaseModel):
+    is_expense_log: bool = Field(
+        description="True if the user is trying to log an expense or providing answers to collect missing details. False if they are just chatting."
     )
-    amount: float = Field(
-        description="The numerical amount of the expense (e.g. 150.0). Always output a positive number."
+    chat_response: Optional[str] = Field(
+        description="Friendly chat response if is_expense_log is False (normal conversation). Leave empty if logging an expense."
     )
-    currency: str = Field(
-        description="The currency code (e.g. EGP, USD, EUR). Default to 'EGP' if no currency is mentioned and no other currency is inferred."
+
+    # Extracted Expense Fields (Optional because they might be collected across turns)
+    date: Optional[str] = Field(
+        description="YYYY-MM-DD. Resolve relative dates (today, yesterday) based on current_date."
     )
-    description: str = Field(
-        description="A concise description of what was purchased (e.g. 'Uber to work', 'McDonalds meal'). Do not include the amount or date in this description."
+    amount: Optional[float] = Field(description="Numeric amount of expense.")
+    category: Optional[str] = Field(
+        description="Expense category in Arabic/English (e.g. اكل/Food, مواصلات/Transport, فواتير/Utilities, تسوق/Shopping, ترفيه/Entertainment, صحة/Health, أخرى/Other)."
     )
-    category: str = Field(
-        description="The category of the expense. Must be one of: Food, Transport, Utilities, Entertainment, Health, Shopping, Education, Other."
-    )
-    payment_method: str = Field(
-        description="The payment method or account used. Must be one of: Cash, Card, Wallet, Instapay, Bank, Other. Default to 'Cash' if not specified."
+    description: Optional[str] = Field(description="Description of purchase.")
+    currency: Optional[str] = Field(description="Currency. Default is EGP.")
+    payment_method: Optional[str] = Field(description="Payment method. Default is Cash.")
+
+    # Missing Fields Prompt
+    missing_fields_prompt: Optional[str] = Field(
+        description="If is_expense_log is True but any of the mandatory fields (date, amount, category) are missing, generate a friendly, natural message in the user's language (Arabic or English) asking for the missing fields. If all mandatory fields are present, leave this empty."
     )
 
 # Define the DSPy Signature
-class ExpenseSignature(dspy.Signature):
+class RouterSignature(dspy.Signature):
     """
-    Parse an expense transaction message.
-    Extract the transaction details such as date, amount, currency, description, category, and payment method.
-    Resolve relative dates like 'today', 'yesterday', or 'last Friday' relative to the provided current_date (YYYY-MM-DD).
+    Given the full conversation history between a user and an expense-tracking bot,
+    decide the appropriate action:
+    1. If the user is trying to log an expense (or is answering follow-up questions to
+       complete an expense), set is_expense_log to True and extract as many expense fields
+       as are known so far. Fill in missing values carried over from earlier turns using the
+       conversation history.
+    2. If the user is just chatting (greeting, asking questions, off-topic), set
+       is_expense_log to False and provide a friendly chat_response.
+    Resolve relative dates like 'today' or 'yesterday' using the provided current_date.
     """
-    text: str = dspy.InputField(desc="The raw text message describing the expense.")
+    conversation: str = dspy.InputField(desc="JSON string of the full conversation history (list of {role, content} messages).")
     current_date: str = dspy.InputField(desc="The current date in YYYY-MM-DD format, used as the anchor for resolving relative dates.")
-    extracted_expense: ExpenseExtraction = dspy.OutputField(desc="Structured expense data.")
+    output: RouterOutput = dspy.OutputField(desc="Structured routing and extraction result.")
 
-def parse_expense_text(text: str, current_date_str: str = None) -> ExpenseExtraction:
+# Map canonical English categories to support Arabic names too
+CATEGORY_ALIASES = {
+    "اكل": "Food",
+    "طعام": "Food",
+    "food": "Food",
+    "مواصلات": "Transport",
+    "transport": "Transport",
+    "فواتير": "Utilities",
+    "utilities": "Utilities",
+    "تسوق": "Shopping",
+    "shopping": "Shopping",
+    "ترفيه": "Entertainment",
+    "entertainment": "Entertainment",
+    "صحة": "Health",
+    "health": "Health",
+    "تعليم": "Education",
+    "education": "Education",
+    "أخرى": "Other",
+    "other": "Other"
+}
+
+def normalize_category(category: Optional[str]) -> Optional[str]:
+    """Maps an Arabic/English category alias to the canonical English category."""
+    if not category:
+        return None
+    key = category.strip().lower()
+    # Handle case where category is a combined string like "اكل/Food"
+    if "/" in key:
+        key = key.split("/")[0].strip()
+    return CATEGORY_ALIASES.get(key, category.strip())
+
+def run_router(conversation: list, current_date_str: str = None) -> RouterOutput:
     """
-    Uses DSPy Predict to parse the input text and extract an ExpenseExtraction object.
+    Uses DSPy Predict to classify the conversation and extract expense fields
+    (or generate a chat response) based on the full conversation history.
     """
     if not current_date_str:
         current_date_str = datetime.now().strftime("%Y-%m-%d")
-        
-    predictor = dspy.Predict(ExpenseSignature)
-    
+
+    conversation_str = json.dumps(conversation, ensure_ascii=False)
+
+    predictor = dspy.Predict(RouterSignature)
+
     try:
-        logger.info(f"Parsing expense text: '{text}' relative to current date '{current_date_str}'")
-        result = predictor(text=text, current_date=current_date_str)
-        logger.info(f"DSPy parsing successful: {result.extracted_expense}")
-        return result.extracted_expense
+        logger.info(f"Running router with {len(conversation)} messages relative to date '{current_date_str}'")
+        result = predictor(conversation=conversation_str, current_date=current_date_str)
+        output = result.output
+
+        # Only normalize category when logging an expense
+        if output.is_expense_log and output.category:
+            output.category = normalize_category(output.category)
+
+        logger.info(f"DSPy routing result: {output.model_dump()}")
+        return output
     except Exception as e:
-        logger.error(f"DSPy parsing failed: {e}")
+        logger.error(f"DSPy routing failed: {e}")
         raise e
