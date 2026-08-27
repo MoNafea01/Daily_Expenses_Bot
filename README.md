@@ -15,7 +15,6 @@ Designed for seamless integration with local financial dashboards, such as Obsid
    - **Persist:** Appends the record to your Google Sheets database.
    - **Double-Check:** Verifies the write by querying the spreadsheet and comparing the last row with the input values.
    - **Respond:** Sends a beautiful, formatted Markdown confirmation back to you on Telegram.
-4. **Keep Alive:** A free 10-minute cron job from `cron-job.org` pings `/health` to keep the Render server from falling asleep.
 
 ---
 
@@ -60,40 +59,33 @@ The server will start at `http://127.0.0.1:8000`. You can inspect the health che
 
 ---
 
-## ☁️ Deploying to Render
+## ☁️ Deploying to Vercel
 
 1. Push your repository to **GitHub** or **GitLab**.
-2. Go to [Render](https://render.com/) and create a new **Web Service**.
-3. Link your repository.
-4. Configure the settings:
-   - **Runtime:** `Python`
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. In the **Environment** tab, add all variables from your `.env` file (`TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`).
-6. Click **Deploy Web Service**.
+2. Go to the [Vercel Dashboard](https://vercel.com/) and create a **New Project**.
+3. Import your repository.
+4. Expand **Environment Variables** and add all variables from your `.env` file:
+   - `TELEGRAM_BOT_TOKEN`
+   - `GROQ_API_KEY`
+   - `GOOGLE_SHEET_ID`
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`
+5. Click **Deploy**. Vercel will automatically read `vercel.json` and build your FastAPI server as a serverless function.
 
 ---
 
-## 🔗 Telegram Webhook & Cron Setup
+## 🔗 Telegram Webhook
 
-### 1. Register Webhook
-Once your Render web service is live, copy its public URL (e.g., `https://daily-expenses-bot.onrender.com`).
+Register Webhook
+Once your Vercel project is live, copy your deployment URL (e.g., `https://daily-expenses-bot.vercel.app`).
 Register this URL with Telegram by opening your web browser and navigating to:
 ```text
-https://<your-render-app-url>/setup-webhook?url=https://<your-render-app-url>/webhook
+https://<your-vercel-app-url>/setup-webhook?url=https://<your-vercel-app-url>/webhook
 ```
-Example: `https://daily-expenses-bot.onrender.com/setup-webhook?url=https://daily-expenses-bot.onrender.com/webhook`
+Example: `https://daily-expenses-bot.vercel.app/setup-webhook?url=https://daily-expenses-bot.vercel.app/webhook`
 
 If successful, the page will output:
 `{"status":"success","message":"Telegram webhook has been registered to: https://.../webhook"}`
 
-### 2. Keep Render Awake (Remove Spin-Up Delay)
-Since Render's free tier spins down services after 15 minutes of inactivity:
-1. Create a free account on [cron-job.org](https://cron-job.org/).
-2. Create a new cron job:
-   - **URL:** `https://<your-render-app-url>/health`
-   - **Interval:** Every 10 minutes.
-This keeps the server active, ensuring zero delays when you send expenses via Telegram.
 
 ---
 
