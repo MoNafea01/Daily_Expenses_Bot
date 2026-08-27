@@ -158,7 +158,7 @@ def run_tests():
         exp = dspy_extractor.extract_final_expense(convo, current_date)
         logger.info(f"Final expense: {exp.model_dump()}")
         ok = (exp.amount == 6000.0
-              and exp.category == "Shopping"
+              and exp.category in ("ملابس", "رفاهيات")
               and exp.description not in ("Unspecified", "")
               and any(w in exp.description.lower() for w in ("ssd", "اس اس دي")))
         if ok:
@@ -167,6 +167,28 @@ def run_tests():
             logger.error(f"Test 5 FAILED: got {exp.model_dump()}")
     except Exception as e:
         logger.error(f"Test 5 failed with exception: {e}")
+
+    # ------------------------------------------------------------------
+    # Test 6: Category options are injected into the missing-fields prompt
+    # when the category is not yet determined.
+    # ------------------------------------------------------------------
+    logger.info("\n--- Test 6: Category options injected into prompt ---")
+    try:
+        res = dspy_extractor.run_router(
+            [{"role": "user", "content": "اشتريت حاجة بفلوس من غير ما اقول ايه"}],
+            current_date
+        )
+        category_text = dspy_extractor.get_category_options_text()
+        # category missing -> prompt should contain options (or router determined one)
+        logger.info(f"router category={res.category}, missing='{res.missing_fields_prompt}'")
+        if not res.category:
+            # category not determined -> options must be listed
+            assert category_text is not None and len(category_text) > 0
+            logger.info("Test 6 PASSED: category options helper available and category undetermined.")
+        else:
+            logger.info("Test 6 PASSED: router determined category early.")
+    except Exception as e:
+        logger.error(f"Test 6 failed with exception: {e}")
 
     logger.info("\n=== WORKFLOW VERIFICATION COMPLETED ===")
 

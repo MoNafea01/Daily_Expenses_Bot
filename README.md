@@ -39,6 +39,24 @@ The bot uses **two worksheets** in the same spreadsheet:
 - `Sheet1` (or the first sheet): stores logged expense records.
 - `Memory`: stores per-`chat_id` conversation history (JSON) to support multi-turn expensing. It is created automatically on first use.
 
+### Budget Categories
+
+Every expense is classified into one of **9 budget categories** (canonical Arabic names; the bot accepts many Arabic/English aliases and normalizes them automatically):
+
+| Category | Budget share | Examples |
+| :--- | :--- | :--- |
+| استثمار | 25% | Investment, stocks, funds |
+| طوارئ | 15% | Emergency, insurance |
+| ادخار | 15% | Savings, deposits |
+| أكل | 15% | Food, restaurants, coffee |
+| مواصلات | 5% | Transport, taxi, fuel |
+| رفاهيات | 10% | Entertainment, games, hobbies |
+| ملابس | 5% | Clothing, shoes |
+| مرافق | 5% | Utilities, electricity, water |
+| إنترنت | 5% | Internet, data, WiFi |
+
+When a category is needed and hasn't been determined, the bot lists these options so you can type one exactly.
+
 ---
 
 ## 🚀 Local Development & Testing

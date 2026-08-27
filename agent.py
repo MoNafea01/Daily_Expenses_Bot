@@ -88,6 +88,12 @@ def missing_fields_node(state: AgentState) -> dict:
     router_output = state.get("router_output") or {}
     prompt = router_output.get("missing_fields_prompt") or "Please provide the missing expense details."
 
+    # Deterministically ensure the category options are shown whenever the
+    # category is not yet determined, so the user can type it correctly.
+    if not router_output.get("category"):
+        category_options = dspy_extractor.get_category_options_text()
+        prompt = f"{prompt}\n\nالفئات المتاحة (اختر واحدة): {category_options}"
+
     conversation = list(state["conversation"])
     conversation.append({"role": "assistant", "content": prompt})
     sheets_client.save_conversation_history(state["chat_id"], conversation)
