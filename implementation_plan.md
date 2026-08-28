@@ -37,7 +37,7 @@ graph TD
 
 > [!IMPORTANT]
 > **Obsidian Sync Strategy:** 
-> Because the server runs on Render (in the cloud) and your Obsidian vault is local (`D:\Obsidian Vault\Financial Dashboard.md`), the cloud server cannot directly write to your D: drive.
+> Because the server runs on Vercel (in the cloud) and your Obsidian vault is local (`D:\Obsidian Vault\Financial Dashboard.md`), the cloud server cannot directly write to your D: drive.
 > 
 > We propose two ways to sync data to Obsidian:
 > 1. **Option A (Recommended):** We provide a local Python script (`sync_obsidian.py`) that you can run on your local machine (manually or as a local Windows Task Scheduler job) which pulls the latest entries from the Google Sheet and appends/syncs them directly into your local `Financial Dashboard.md` note in a clean Markdown table format.
@@ -47,7 +47,7 @@ graph TD
 
 > [!WARNING]
 > **Telegram Webhook Setup:**
-> When the FastAPI server is deployed to Render, we will need to register its public URL with the Telegram Bot API using the `setWebhook` endpoint. We will provide a helper script/endpoint to automatically handle this.
+> When the FastAPI server is deployed to Vercel, we will need to register its public URL with the Telegram Bot API using the `setWebhook` endpoint. We will provide a helper script/endpoint to automatically handle this.
 
 ---
 

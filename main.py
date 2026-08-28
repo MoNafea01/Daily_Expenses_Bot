@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import agent
 import telegram_utils
+import config
 
 # Configure logging to standard output
 logging.basicConfig(
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+allowed_user_id = config.ALLOWED_USER_ID
 
 app = FastAPI(
     title="Daily Expenses Bot Server",
@@ -66,7 +68,12 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
             # Could be a channel post, callback query, edited message, etc.
             logger.info("Ignoring update: 'message' object not found in payload.")
             return {"status": "ignored"}
-            
+        
+        sender_id = message.get("from", {}).get("id")
+        if allowed_user_id and str(sender_id) != str(allowed_user_id):
+            logger.warning(f"Unauthorized access attempt by user ID {sender_id}. Allowed user ID is {allowed_user_id}.")
+            return {"status": "unauthorized", "message": "You are not authorized to use this bot."}   
+        
         chat = message.get("chat")
         text = message.get("text")
         message_date_unix = message.get("date")
@@ -83,16 +90,10 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
             date_str = message_date.strftime("%Y-%m-%d")
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
-            
-        # Add parsing and persistence task to FastAPI background tasks queue
-        background_tasks.add_task(
-            run_agent_in_background,
-            text=text,
-            chat_id=chat_id,
-            date_str=date_str
-        )
-        logger.info(f"Queued background processing for chat_id={chat_id}, text='{text}'")
         
+        logger.info(f"Processing text for chat_id={chat_id}, text='{text}'")
+        agent.run_expense_flow(raw_text=text, chat_id=chat_id, current_date=date_str)
+        logger.info(f"Successfully processed flow for chat_id={chat_id}")
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Error handling webhook request: {e}")
@@ -101,7 +102,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
 @app.get("/health")
 def health_check():
     """
-    Health check endpoint for Render keep-alive (cron-job.org).
+    Health check endpoint for Vercel.
     """
     return {
         "status": "healthy",
