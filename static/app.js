@@ -368,7 +368,10 @@ function renderKPIs(monthKey, rows, budget) {
 }
 
 function kpiCard(value, label, cls) {
-  return '<div class="kpi ' + (cls || "") + '"><div class="value">' + fmt(value) +
+  // Numbers are run through the number formatter; pre-formatted strings
+  // (e.g. "75%") are passed through untouched.
+  var display = typeof value === "number" ? fmt(value) : String(value);
+  return '<div class="kpi ' + (cls || "") + '"><div class="value">' + display +
          '</div><div class="label">' + label + '</div></div>';
 }
 
