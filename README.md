@@ -9,7 +9,7 @@ Designed for seamless integration with local financial dashboards, such as Obsid
 ## 🛠️ Architecture
 
 1. **User Message:** Send a natural language expense report (e.g., `"spent 120 EGP on a taxi today"`) to your Telegram Bot.
-2. **FastAPI Webhook:** Receives the Telegram payload, acknowledges it with `200 OK` instantly to prevent Telegram timeouts, and queues the execution as a background task.
+2. **FastAPI Webhook:** Receives the Telegram payload, optionally verifies the `X-Telegram-Bot-Api-Secret-Token` header, and de-duplicates by `update_id` so Telegram's retries never double-log an expense. Processing runs synchronously (reliable on serverless, where post-response work can be frozen).
 3. **Conversational LangGraph Worker (multi-turn):**
    - **Load Memory:** Fetches prior conversation history for the `chat_id` from the `Memory` worksheet in your Google Sheet so details can be carried across turns.
    - **Route & Extract:** A **DSPy + Groq (`openai/gpt-oss-20b`) router** looks at the full conversation and decides whether this is an expense log (or answers completing it), or just casual chat:
@@ -31,9 +31,16 @@ TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
 GROQ_API_KEY="your_groq_api_key"
 GOOGLE_SHEET_ID="your_google_sheet_id"
 GOOGLE_SERVICE_ACCOUNT_JSON={"type": "service_account", ...}
+ALLOWED_TELEGRAM_USER_ID="your_numeric_telegram_user_id"
+
+# Optional
+TELEGRAM_WEBHOOK_SECRET="a_long_random_string"   # authenticates webhook + /setup-webhook
+APP_TIMEZONE="Africa/Cairo"                       # anchor for "today"/"yesterday" and timestamps
 ```
 
 *Note: Ensure the Google Service Account email has **Editor** access to your Google Sheet.*
+
+*`ALLOWED_TELEGRAM_USER_ID` is required — the bot only responds to that user. Set `TELEGRAM_WEBHOOK_SECRET` to reject forged webhook calls; after setting it, re-run `/setup-webhook` (passing `&secret=...`) so Telegram begins sending the secret header.*
 
 The bot uses **two worksheets** in the same spreadsheet:
 - `Sheet1` (or the first sheet): stores logged expense records.
@@ -55,7 +62,7 @@ Every expense is classified into one of **9 budget categories** (canonical Arabi
 | مرافق | 5% | Utilities, electricity, water |
 | إنترنت | 5% | Internet, data, WiFi |
 
-When a category is needed and hasn't been determined, the bot lists these options so you can type one exactly.
+When a category is needed and hasn't been determined, the bot lists these options so you can type one exactly. Anything that still can't be matched is written as **أخرى** (no budget) rather than an arbitrary string, so the dashboard always accounts for it.
 
 ---
 
@@ -66,15 +73,22 @@ Set up a Python virtual environment and install the required dependencies:
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-### 2. Verify Your Configuration
-Run the integration test script to verify DSPy extraction, Google Sheets connection, and the LangGraph workflow:
+### 2. Run the tests
+Fast, offline unit tests (no API keys or network needed):
+```bash
+pytest            # Python: config, routing, verification, idempotency, webhook
+node static/app.test.js   # dashboard helpers
+```
+
+`test_workflow.py` is a **live** end-to-end script that calls the real Groq and
+Google Sheets APIs and writes throwaway rows to your sheet. Run it only against a
+scratch spreadsheet, with a full `.env`:
 ```bash
 python test_workflow.py
 ```
-This script will mock a Telegram message send, verify sheets logging, and output a preview of the formatted Markdown response.
 
 ### 3. Run FastAPI Server Locally
 Start the server using `uvicorn`:
@@ -95,7 +109,11 @@ The server will start at `http://127.0.0.1:8000`. You can inspect the health che
    - `GROQ_API_KEY`
    - `GOOGLE_SHEET_ID`
    - `GOOGLE_SERVICE_ACCOUNT_JSON`
+   - `ALLOWED_TELEGRAM_USER_ID`
+   - `TELEGRAM_WEBHOOK_SECRET` and `APP_TIMEZONE` (optional)
 5. Click **Deploy**. Vercel will automatically read `vercel.json` and build your FastAPI server as a serverless function.
+
+> **Note on idempotency:** duplicate-suppression uses an in-memory set, which is per-instance. On a multi-instance or frequently cold-started deployment, back it with a shared KV store (Vercel KV / Upstash Redis) keyed by `update_id`.
 
 ---
 
@@ -108,6 +126,8 @@ Register this URL with Telegram by opening your web browser and navigating to:
 https://<your-vercel-app-url>/setup-webhook?url=https://<your-vercel-app-url>/webhook
 ```
 Example: `https://daily-expenses-bot.vercel.app/setup-webhook?url=https://daily-expenses-bot.vercel.app/webhook`
+
+If `TELEGRAM_WEBHOOK_SECRET` is set, append `&secret=<your-secret>` — the endpoint requires it and registers it with Telegram.
 
 If successful, the page will output:
 `{"status":"success","message":"Telegram webhook has been registered to: https://.../webhook"}`

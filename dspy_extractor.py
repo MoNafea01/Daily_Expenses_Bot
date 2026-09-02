@@ -1,10 +1,11 @@
 import logging
 import json
-from datetime import datetime
+import threading
 from typing import Optional, List
 import dspy
 from pydantic import BaseModel, Field
 import config
+import timeutils
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +24,25 @@ CATEGORIES = {
     "إنترنت": 0.05,    # Internet
 }
 
-# Initialize DSPy language model using Groq through LiteLLM
-try:
-    # Use gpt-oss-20b model from Groq
-    lm = dspy.LM("groq/openai/gpt-oss-20b", api_key=config.GROQ_API_KEY)
-    dspy.configure(lm=lm)
-    logger.info("Configured DSPy with Groq LM (openai/gpt-oss-20b)")
-except Exception as e:
-    logger.error(f"Error configuring DSPy LM: {e}")
-    raise
+# DSPy language model (Groq via LiteLLM). Configured lazily on first use so that
+# importing this module - e.g. to reach the pure helpers below, or for tests -
+# does not require a live API key or a network call.
+_LM_MODEL = "groq/openai/gpt-oss-20b"
+_lm_lock = threading.Lock()
+_lm_configured = False
+
+
+def _ensure_lm() -> None:
+    global _lm_configured
+    if _lm_configured:
+        return
+    with _lm_lock:
+        if _lm_configured:
+            return
+        lm = dspy.LM(_LM_MODEL, api_key=config.GROQ_API_KEY)
+        dspy.configure(lm=lm)
+        _lm_configured = True
+        logger.info("Configured DSPy with Groq LM (%s)", _LM_MODEL)
 
 # Define the Pydantic model for unified routing & extraction output
 class RouterOutput(BaseModel):
@@ -247,9 +258,17 @@ CATEGORY_ALIASES = {
     "health": "طوارئ",
     "تعليم": "استثمار",
     "education": "استثمار",
-    "أخرى": "رفاهيات",
-    "other": "رفاهيات",
+    "أخرى": "أخرى",
+    "other": "أخرى",
 }
+
+# Bucket for anything that cannot be mapped to one of the 9 budget categories.
+# The dashboard renders this row too (with a 0 budget), so miscategorized spend
+# stays visible instead of silently vanishing from the budget totals.
+FALLBACK_CATEGORY = "أخرى"
+
+# Every value that may legitimately be written to the sheet's Category column.
+KNOWN_CATEGORIES = list(CATEGORIES.keys()) + [FALLBACK_CATEGORY]
 
 def get_category_options_text() -> str:
     """Returns a readable list of the valid categories (names only) for prompt injection."""
@@ -258,8 +277,9 @@ def get_category_options_text() -> str:
 def normalize_category(category: Optional[str]) -> Optional[str]:
     """
     Maps an Arabic/English category alias (or a combined 'Alias/English' string)
-    to the canonical category name. Returns the canonical name, or the raw input
-    if it cannot be normalized.
+    to one of the canonical budget categories. Returns None for empty input, and
+    FALLBACK_CATEGORY ("أخرى") when the value cannot be recognized - so the sheet
+    never receives an arbitrary string the dashboard cannot account for.
     """
     if not category:
         return None
@@ -274,15 +294,16 @@ def normalize_category(category: Optional[str]) -> Optional[str]:
     stripped = key
     if stripped.startswith("ال") and len(stripped) > 3:
         stripped = stripped[2:]
-    return CATEGORY_ALIASES.get(stripped, category.strip())
+    return CATEGORY_ALIASES.get(stripped, FALLBACK_CATEGORY)
 
 def run_router(conversation: list, current_date_str: str = None) -> RouterOutput:
     """
     Uses DSPy Predict to classify the conversation and extract expense fields
     (or generate a chat response) based on the full conversation history.
     """
+    _ensure_lm()
     if not current_date_str:
-        current_date_str = datetime.now().strftime("%Y-%m-%d")
+        current_date_str = timeutils.today_str()
 
     conversation_str = json.dumps(conversation, ensure_ascii=False)
 
@@ -310,8 +331,9 @@ def extract_final_expense(conversation: list, current_date_str: str = None) -> F
     This is more reliable than trusting fields to be carried over on the final routing turn,
     because it combines all information spread across all messages into one record.
     """
+    _ensure_lm()
     if not current_date_str:
-        current_date_str = datetime.now().strftime("%Y-%m-%d")
+        current_date_str = timeutils.today_str()
 
     conversation_str = json.dumps(conversation, ensure_ascii=False)
     predictor = dspy.Predict(FinalExpenseSignature)
@@ -320,7 +342,7 @@ def extract_final_expense(conversation: list, current_date_str: str = None) -> F
         logger.info(f"Extracting final expense from {len(conversation)} messages relative to date '{current_date_str}'")
         result = predictor(conversation=conversation_str, current_date=current_date_str)
         expense = result.expense
-        expense.category = normalize_category(expense.category) or expense.category
+        expense.category = normalize_category(expense.category) or FALLBACK_CATEGORY
         logger.info(f"Final expense extraction: {expense.model_dump()}")
         return expense
     except Exception as e:

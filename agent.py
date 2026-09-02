@@ -4,6 +4,7 @@ from langgraph.graph import StateGraph, END
 import dspy_extractor
 import sheets_client
 import telegram_utils
+import timeutils
 
 logger = logging.getLogger(__name__)
 
@@ -119,28 +120,33 @@ def persist_expense_node(state: AgentState) -> dict:
     # Run a dedicated complete extraction over the FULL conversation so that
     # fields mentioned in earlier turns (e.g. description/category) are not lost
     # when the final message only provides the date or amount.
+    generic_failure = (
+        "❌ *لم أتمكن من تسجيل المصروف.*\n\n"
+        "حدث خطأ مؤقت أثناء المعالجة. من فضلك أعد إرسال الرسالة بعد قليل."
+    )
+
     try:
         final_expense = dspy_extractor.extract_final_expense(conversation, current_date)
         expense = final_expense.model_dump()
     except Exception as e:
-        error_msg = f"Failed to extract complete expense details: {e}"
-        logger.error(error_msg)
+        logger.exception("Failed to extract complete expense details: %s", e)
         return {
             "appended_row": None,
             "is_verified": False,
-            "reply_text": f"❌ *Transaction failed*\n\nUnable to process the expense. Error:\n`{error_msg}`",
+            "reply_text": generic_failure,
             "success": False
         }
 
     raw_text = _description_from_conversation(conversation)
 
     try:
-        row = sheets_client.append_expense(expense, raw_text)
+        append_result = sheets_client.append_expense(expense, raw_text)
+        row = append_result["row"]
         logger.info(f"Appended expense row: {row}")
 
-        verified = sheets_client.verify_expense_write(row)
+        verified = sheets_client.verify_expense_write(append_result)
         if not verified:
-            raise ValueError("Google Sheets write verification failed. The last row does not match the expected row.")
+            raise ValueError("Google Sheets write verification failed for the appended row.")
 
         # Clear conversation memory since the expense was recorded
         sheets_client.clear_conversation_history(chat_id)
@@ -170,12 +176,11 @@ def persist_expense_node(state: AgentState) -> dict:
             "success": True
         }
     except Exception as e:
-        error_msg = f"Failed to persist expense: {e}"
-        logger.error(error_msg)
+        logger.exception("Failed to persist expense: %s", e)
         return {
             "appended_row": None,
             "is_verified": False,
-            "reply_text": f"❌ *Transaction failed*\n\nUnable to process the expense. Error:\n`{error_msg}`",
+            "reply_text": generic_failure,
             "success": False
         }
 
@@ -242,9 +247,8 @@ def run_expense_flow(raw_text: str, chat_id: int, current_date: str = None) -> d
     Loads persistent memory, routes, collects missing fields across turns,
     records verified expenses, and clears memory on completion.
     """
-    from datetime import datetime as _dt
     if not current_date:
-        current_date = _dt.now().strftime("%Y-%m-%d")
+        current_date = timeutils.today_str()
 
     initial_state = {
         "raw_text": raw_text,

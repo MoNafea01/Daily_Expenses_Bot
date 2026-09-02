@@ -1,0 +1,5 @@
+# Development / test dependencies. Install with:
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0.0
+ipython>=8.0.0   # used only by export_graph.py to render the LangGraph diagram

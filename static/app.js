@@ -25,7 +25,8 @@ var CATEGORIES = {
   "رفاهيات": 0.10,   // Luxury / Entertainment
   "ملابس": 0.05,     // Clothing
   "مرافق": 0.05,     // Utilities
-  "إنترنت": 0.05     // Internet
+  "إنترنت": 0.05,    // Internet
+  "أخرى": 0          // Other / uncategorized - no budget, shown only when it has spend
 };
 
 var DEFAULTS = {
@@ -429,13 +430,20 @@ function budgetTable(monthKey, rows) {
   var budgets = {};
   Object.keys(CATEGORIES).forEach(function (c) { budgets[c] = CATEGORIES[c] * salary; });
 
+  // Accumulate spend by category. Anything not in the known budget categories
+  // (legacy names, English values, unmapped strings) folds into "أخرى" so no
+  // spend is dropped from the totals.
   var spent = {};
   rows.forEach(function (r) {
-    spent[r.category] = (spent[r.category] || 0) + r.amount;
+    var cat = Object.prototype.hasOwnProperty.call(budgets, r.category) ? r.category : "أخرى";
+    spent[cat] = (spent[cat] || 0) + r.amount;
   });
 
   var totalBudget = 0, totalSpent = 0;
-  var bodyRows = Object.keys(budgets).map(function (cat) {
+  var bodyRows = Object.keys(budgets).filter(function (cat) {
+    // Hide the zero-budget "أخرى" row unless it actually has spend.
+    return budgets[cat] > 0 || (spent[cat] || 0) !== 0;
+  }).map(function (cat) {
     var budget = budgets[cat];
     var actual = spent[cat] || 0;
     var remaining = budget - actual;
@@ -730,4 +738,18 @@ function init() {
   loadData();
 }
 
-document.addEventListener("DOMContentLoaded", init);
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("DOMContentLoaded", init);
+}
+
+/* Expose pure helpers for unit testing under Node (no-op in the browser). */
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    fmt: fmt,
+    kpiCard: kpiCard,
+    budgetRow: budgetRow,
+    parseCsvDate: parseCsvDate,
+    parseCSV: parseCSV,
+    CATEGORIES: CATEGORIES,
+  };
+}
